@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e # exit on an error
-GO_TEST="go test -race -cover -run Test"
+GO_TEST="go test -race -cover"
 do_info_jsonl(){
     echo '{"API":"v0"}'
 }
@@ -8,14 +8,33 @@ enum_pkgs(){
     # rafttest has been disabled by default (https://github.com/coreos/etcd/pull/5707)
     go list -f '{{if len .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v rafttest
 }
+command_jsonl() {
+    flags=$1
+    pkgs=$2
+    echo "{\"Command\": \"$GO_TEST $flags $pkgs\"}"
+}
 do_enum_jsonl(){
-    enum_pkgs | sed -e "s/\(.*\)/{\"Command\": \"$GO_TEST \1\"}/g"
+    # e2e and integration are big; so we split them
+    pkgs=$(enum_pkgs | grep -v e2e | grep -v integration)
+    for pkg in $pkgs; do
+	command_jsonl "-run Test" $pkg;
+    done
+    # FIXME: improve regexp readability
+    for f in e2e integration; do
+	pkg=github.com/coreos/etcd/$f
+	command_jsonl "-run TestV3" $pkg
+	command_jsonl "-run TestV[^3]" $pkg
+	command_jsonl "-run TestC.*V3" $pkg
+	command_jsonl "-run TestC.*V[^3]" $pkg
+	command_jsonl "-run TestC[^V]*$" $pkg
+	command_jsonl "-run Test[^VC].*" $pkg
+    done
 }
 do_exec_all(){
     pkgs=$(enum_pkgs)
     export GOPATH=$GOPATH/src/github.com/coreos/etcd/gopath
     set -x
-    $GO_TEST $pkgs
+    $GO_TEST -run Test $pkgs
     set +x
 }
 do_exec(){
