@@ -10,7 +10,13 @@ RUN mkdir -p $GOPATH/src/github.com/coreos && \
  cd etcd && \
  git checkout $ETCD_CHECKOUT
 WORKDIR $GOPATH/src/github.com/coreos/etcd
-RUN ./build && cp -r bin gopath
+
+# Pre-compile test binaries at once, using go-test-helper.sh
+# NOTE: rafttest has been disabled by default (https://github.com/coreos/etcd/pull/5707)
+RUN ./build && \
+  go list -f '{{if len .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v rafttest > /pkgs.txt
+ADD go-test-helper.sh /
+RUN GOPATH=$(pwd)/gopath go test -v -cover -race -exec /go-test-helper.sh $(cat /pkgs.txt)
 
 ADD NamazuSwarmfile /
 RUN chmod +x /NamazuSwarmfile

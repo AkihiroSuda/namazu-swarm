@@ -1,55 +1,68 @@
-#!/bin/sh
+#!/bin/bash
 set -e # exit on an error
-GO_TEST="go test -race -cover"
+ATOZ=$(perl -e 'foreach(A..Z){print "$_ "}')
+export PATH=$(pwd)/bin:$PATH
 do_info_jsonl(){
     echo '{"API":"v0"}'
 }
-enum_pkgs(){
-    # rafttest has been disabled by default (https://github.com/coreos/etcd/pull/5707)
-    go list -f '{{if len .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v rafttest
+test_pkg(){
+    # TODO: support other flags
+    pkg=$1
+    regexp=Test
+    [ x$2 != x ] && regexp=$2
+    testbin=/testbin/$pkg/$(basename $pkg).test
+    (cd $GOPATH/src/$pkg && $testbin -test.short -test.run $regexp)
 }
-command_jsonl() {
-    flags=$1
-    pkgs=$2
-    echo "{\"Command\": \"$GO_TEST $flags $pkgs\"}"
+command_jsonl(){
+    echo "{\"Command\": \"$@\"}"
 }
 do_enum_jsonl(){
-    # e2e and integration are big; so we split them
-    pkgs=$(enum_pkgs | grep -v e2e | grep -v integration)
-    for pkg in $pkgs; do
-	command_jsonl "-run Test" $pkg;
+    for pkg in $(cat /pkgs.txt | grep -v integration | grep -v e2e); do
+	command_jsonl $pkg
     done
-    # FIXME: improve regexp readability
-    for f in e2e integration; do
-	pkg=github.com/coreos/etcd/$f
-	command_jsonl "-run TestV3" $pkg
-	command_jsonl "-run TestV[^3]" $pkg
-	for g in a b c d e f g h i j k l m n o p q r s t u v w x y z; do
-	    command_jsonl "-run TestC.*V3$g" $pkg
-	done
-	command_jsonl "-run TestC.*V[^3]" $pkg
-	command_jsonl "-run TestC[^V]*$" $pkg
-	# excludes V, C
-	for g in A B D E F G H I J K L M N O P Q R S T U W X Y Z; do
-	    command_jsonl "-run Test$g" $pkg
-	done
+    pkg=github.com/coreos/etcd/e2e
+
+    command_jsonl $pkg TestV2
+    command_jsonl $pkg TestV3
+    command_jsonl $pkg TestCtlV3WatchClient
+    command_jsonl $pkg TestCtlV3WatchInteractiveClient    
+    for f in $ATOZ; do
+	command_jsonl $pkg TestCtlV2$f
+	[ $f != C ] && [ $f != W ] && command_jsonl $pkg TestCtlV3$f
+	[ $f != C ] && [ $f != V ] && command_jsonl $pkg Test$f
     done
-}
-do_exec_all(){
-    pkgs=$(enum_pkgs)
-    export GOPATH=$GOPATH/src/github.com/coreos/etcd/gopath
-    set -x
-    $GO_TEST -run Test $pkgs
-    set +x
+
+    pkg=github.com/coreos/etcd/integration
+    command_jsonl $pkg TestV2
+    for f in $ATOZ; do
+	command_jsonl $pkg TestV3$f
+	[ $f != V ] && command_jsonl $pkg Test$f
+    done    
 }
 do_exec(){
-    export GOPATH=$GOPATH/src/github.com/coreos/etcd/gopath
-    $@
+    test_pkg $@
+}
+do_exec_all(){
+    # execute precompiled tests sequentially.
+    for pkg in $(cat /pkgs.txt); do
+	set +e; set-x
+	time do_exec $pkg
+	set +x; set -e
+    done
+}
+do_exec_all2(){
+    # compile and execute at once.
+    # go itself seems doing some parallelization automatically.
+    # so it is faster than exec_all.
+    cp -r bin gopath/
+    GOPATH=$(pwd)/gopath \
+	  go test -race -cover -short -run Test $(cat /pkgs.txt)
 }
 case "$1" in
     "info-jsonl" ) do_info_jsonl;;
     "enum-jsonl" ) do_enum_jsonl;;
     "exec" ) shift; do_exec "$@";;
     "_exec_all" ) do_exec_all;; # _exec_all is not an API call. It is a toy for humans (e.g. benchmark)
+    "_exec_all2" ) do_exec_all2;; # ditto
     * ) echo "Usage: $(basename $0) info-jsonl | enum-jsonl | exec [COMMAND] | _exec_all" >&2 ; exit 1;;
 esac

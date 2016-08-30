@@ -3,7 +3,7 @@
 #  $ docker build -t etcd-nmzswarm ./example/etcd
 #  $ gcloud container clusters get-credentials <CLUSTER> \
 #    --zone <ZONE> --project <PROJECT_ID>
-#  $ time PARALLEL=50 <THIS_SCRIPT> etcd-nmzswarm
+#  $ PARALLEL=50 <THIS_SCRIPT> etcd-nmzswarm
 set -e # exit on an error
 
 : ${PROJECT:=$(gcloud config list --format='value(core.project)')}
@@ -16,6 +16,6 @@ IMAGE=$1
 
 set -x
 docker tag $1 $GCR/$PROJECT/$IMAGE:$TAG
-gcloud docker push $GCR/$PROJECT/$IMAGE:$TAG
-$NMZSWARM --driver=k8s run --ui simple --parallel $PARALLEL --logs $LOGS $GCR/$PROJECT/$IMAGE:$TAG
+time gcloud docker push $GCR/$PROJECT/$IMAGE:$TAG
+time $NMZSWARM --driver=k8s run --ui simple --parallel $PARALLEL --logs $LOGS $GCR/$PROJECT/$IMAGE:$TAG
 set +x
