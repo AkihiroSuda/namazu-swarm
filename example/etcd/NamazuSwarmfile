@@ -24,10 +24,15 @@ do_enum_jsonl(){
 	pkg=github.com/coreos/etcd/$f
 	command_jsonl "-run TestV3" $pkg
 	command_jsonl "-run TestV[^3]" $pkg
-	command_jsonl "-run TestC.*V3" $pkg
+	for g in a b c d e f g h i j k l m n o p q r s t u v w x y z; do
+	    command_jsonl "-run TestC.*V3$g" $pkg
+	done
 	command_jsonl "-run TestC.*V[^3]" $pkg
 	command_jsonl "-run TestC[^V]*$" $pkg
-	command_jsonl "-run Test[^VC].*" $pkg
+	# excludes V, C
+	for g in A B D E F G H I J K L M N O P Q R S T U W X Y Z; do
+	    command_jsonl "-run Test$g" $pkg
+	done
     done
 }
 do_exec_all(){
