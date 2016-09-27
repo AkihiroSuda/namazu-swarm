@@ -1,0 +1,234 @@
+swagger: '2.0'
+info:
+  version: 0.1.0-dev
+  title: Namazu Swarm REST API
+  description: |
+    **Namazu Swarm: CI Job Parallelizer built on Docker and Kubernetes**
+    
+    * GitHub: https://github.com/osrg/namazu-swarm
+    * Swagger Document: http://editor.swagger.io/#/?import=https://raw.githubusercontent.com/osrg/namazu-swarm/master/swagger.yaml
+    
+    ----
+    Master server (`nmzswarm`) submits multiple jobs to a distributed server cluster in parallel, upon requests from the workers in the cluster.
+    Typically, the workers are orchestrated using Docker Swarm or Kubernetes.
+    
+    The master URL is provided to workers via `NMZSWARM_MASTER` environment variable.
+    e.g. "http://master:80"
+    
+    Worker pseudo code:
+    ```python
+    commands = ['echo foo', 'echo bar']
+    base = getenv('NMZSWARM_MASTER') + '/v0'
+    http_post(base+'/commands', '\n'.join(commands), 'text/plain')
+    while True:
+      qitem = http_get(base+'/q/'+worker_id)
+      http_delete(base+'/q/'+worker_id+'/'+qitem.receipt)
+      for job in qitem.jobs:
+        for i in range(job.count):
+          status = {'jobID': job.ID, 'iteration': i, 'status': 'starting'}
+          base2 = base+'/jobs/'+job.ID+'/'+str(i)
+          http_post(base2+'/status', status, 'application/json')
+          code, output = exec(job.Command)
+          http_post(base2+'/stream', output, 'application/octet-stream')
+          status['status']='exited', status['exitCode']=code
+          http_post(base2+'/status', status, 'application/json')
+    ```
+    ----
+      
+basePath: /v0.1
+schemes:
+  - http
+consumes:
+  - application/json
+  - application/octet-stream
+  - text/plain
+produces:
+  - application/json
+paths:
+  /commands:
+    post:
+      description: A worker proposes the command list to the master. The master can reject the proposed list silently. Also, the master can enqueue a command that was not posted via this operation. The list must be an LF-deliminiated plain text. The text can contain UTF BOM.
+      operationId: proposeCommands
+      tags:
+        - command
+      consumes:
+        - text/plain
+      responses:
+        "200":
+          description: operation successfully completed
+        default:
+          description: unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+  /q/{worker}:
+    get:
+      description: A worker fetchs an item from the master. This operation is blocking and never returns an empty item.
+      operationId: peekQueueItem
+      tags:
+        - queue
+      parameters:
+       - name: worker
+         in: path
+         description: Random worker identifier string.
+         required: true
+         type: string
+      responses:
+        "200":
+          description: A queue item
+          schema:
+            $ref: '#/definitions/QueueItem'
+        default:
+          description: unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+  /q/{worker}/{receipt}:
+    delete:
+      description: A worker deletes an item from the queue.
+      operationId: deleteQueueItem
+      tags:
+        - queue
+      parameters:
+       - name: worker
+         in: path
+         description: Worker identifier string.
+         required: true
+         type: string
+       - name: receipt
+         in: path
+         description: Queue item receipt string.
+         required: true
+         type: string
+      responses:
+        "200":
+          description: operation successfully completed
+        default:
+          description: unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+  /jobs/{job}/{iteration}/stream:
+    post:
+      description: A worker posts the stdout/stderr stream to the master. A worker can call this operation arbitrary times. There is no guarantee that a worker can post all the output stream. This operation can be even called after posting the exiting status if the value of its streamIncomplete field is true.
+      operationId: postJobStream
+      tags:
+        - job
+      consumes:
+        - application/octet-stream
+      parameters:
+       - name: job
+         in: path
+         description: Job ID
+         required: true
+         type: string
+       - name: iteration
+         in: path
+         description: Iteration (0..count-1) Default is 0.
+         required: true
+         type: integer
+         format: uint64
+       - name: timestamp
+         in: query
+         description: UNIX Epoch
+         required: false
+         type: number
+         format: float
+      responses:
+        "200":
+          description: operation successfully completed
+        default:
+          description: unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+  /jobs/{job}/{iteration}/status:
+    post:
+      description: A worker posts the job status to the master.
+      operationId: postJobStatus
+      tags:
+        - job
+      parameters:
+       - name: job
+         in: path
+         description: Job ID
+         required: true
+         type: string
+       - name: iteration
+         in: path
+         description: Iteration (0..count-1) Default is 0.
+         required: true
+         type: integer
+         format: uint64
+       - name: status
+         in: body
+         description: Status
+         required: true
+         schema:
+           $ref: '#/definitions/Status'
+      responses:
+        "200":
+          description: operation successfully completed
+        default:
+          description: unexpected error
+          schema:
+            $ref: '#/definitions/Error'
+definitions: # NOTE: we do not use composition for simplicity
+  QueueItem:
+    description: Queue item
+    required:
+      - receipt
+      - jobs
+    properties:
+      receipt:
+        description: Random receipt string
+        type: string
+      jobs:
+        description: Array of Job
+        type: array
+        items:
+            $ref: '#/definitions/Job'
+  Job:
+    description: job
+    required:
+      - id
+      - command
+      - count
+    properties:
+      id:
+        description: Job ID
+        type: string
+      command:
+        description: Command string
+        type: string
+      count:
+         description: count
+         type: integer
+         format: uint64
+  Status:
+    description: job status
+    required:
+      - jobID
+      - status
+    properties:
+      jobID:
+        description: Job ID
+        type: string
+      iteration:
+         description: Iteration (0..count-1) Default is 0.
+         type: integer
+         format: uint64
+      status:
+        description: Status of the job
+        type: string
+        enum: ["starting", "exited"]
+      exitCode:
+        description: UNIX process exit code. Valid only if status == "exited"
+        type: integer
+        format: int32
+      streamIncomplete:
+        description: True if stream is not completed.. Valid only if status == "exited"
+        type: boolean
+  Error:
+    required:
+      - message
+    properties:
+      message:
+        description: Human-readable message
+        type: string
